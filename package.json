@@ -38,6 +38,7 @@
     "access": "public"
   },
   "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-anonymous-user-id": "0.0.1-rc.5",
     "@deepseek-ai/dsh-commands": "0.0.1-rc.1",
     "@deepseek-ai/dsh-credentials": "0.0.1-rc.1",
@@ -45,17 +46,14 @@
     "@deepseek-ai/dsh-launch-environment": "0.0.1-rc.3",
     "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
     "@deepseek-ai/dsh-settings": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.0.1-rc.1",
-    "@deepseek-ai/cordis": "4.0.1"
+    "@deepseek-ai/dsh-timeout": "0.0.1-rc.1"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.1",
     "eventsource-parser": "^3.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.5.0",
-    "vitest": "^2.1.0",
+    "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-anonymous-user-id": "0.0.1-rc.5",
     "@deepseek-ai/dsh-commands": "0.0.1-rc.1",
     "@deepseek-ai/dsh-credentials": "0.0.1-rc.1",
@@ -64,7 +62,9 @@
     "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
     "@deepseek-ai/dsh-settings": "0.0.1-rc.1",
     "@deepseek-ai/dsh-timeout": "0.0.1-rc.1",
-    "@deepseek-ai/cordis": "4.0.1"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
