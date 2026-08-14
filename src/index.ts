@@ -58,6 +58,16 @@ function resolveConnection(config: Config): RaincodeConnectionOptions {
   }
 }
 
+/** 本地 loopback gateway(baseURL 指向本机)不校验 key,凭据缺失时不阻塞。 */
+export function isLoopbackBaseURL(baseURL: string): boolean {
+  try {
+    const host = new URL(baseURL).hostname.toLowerCase()
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
+  } catch {
+    return false
+  }
+}
+
 export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
   let lastRaw: Config | undefined
@@ -92,9 +102,12 @@ export function apply(ctx: Context, config: Config): void {
         return assertUsableApiKey(ambient.value, 'raincode', ref)
       }
     }
-    // 本地 gateway 不校验 key;这里只满足 dsh 凭据接缝。仍给出可操作报错。
+    // 本地 loopback gateway 不校验 key:凭据缺失时给占位符而非 MISSING_CREDENTIAL,
+    // 否则「key 是摆设」的本地用法会被凭据接缝挡在门外。
+    if (isLoopbackBaseURL(options().baseURL)) return 'raincode-local'
+    // 远端 gateway 仍需真实凭据。仍给出可操作报错。
     throw new LlmError(
-      `raincode: no API key for provider route "${PROVIDER}"; store ${ref} through the credentials service, or export ${ref} in the launching environment (the local gateway ignores it)`,
+      `raincode: no API key for provider route "${PROVIDER}"; store ${ref} through the credentials service, or export ${ref} in the launching environment (a local loopback gateway does not need one)`,
       'MISSING_CREDENTIAL',
     )
   }

@@ -38,49 +38,62 @@ model logic.
 ## Install in dsh
 
 ```bash
-npm i dsh-plugins-raincode
+dsh plugin --profile web add dsh-plugins-raincode
 ```
 
-Add the plugin to your dsh `cordis.yml`:
+Then add the row to the profile's patch layer
+(`~/.dsh/profiles/web/cordis.patch.yml`, or `~/.dsh/cordis.patch.yml` for every
+profile):
 
 ```yaml
-- id: raincode
-  name: dsh-plugins-raincode
-  config:
-    baseURL: http://127.0.0.1:8787
-    apiKeyEnv: RAINCODE_API_KEY
+- insert:
+    - id: raincode
+      name: dsh-plugins-raincode
+      config:
+        baseURL: http://127.0.0.1:8787
+        apiKeyEnv: RAINCODE_API_KEY
 ```
+
+`dsh --profile web --dump-config` should show the raincode row; restart
+`dsh web` to load it.
 
 ## Configuration
 
 | Field | Default | Meaning |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8787` | raincode gateway address |
-| `apiKeyEnv` | `RAINCODE_API_KEY` | dsh credential seam only; the local gateway does not verify keys |
-| `models` | `[]` | optional static catalog override; the pool is served by the gateway |
-| `streamIdleTimeoutMs` | `300000` | stream idle timeout |
+| `apiKeyEnv` | `RAINCODE_API_KEY` | dsh credential seam only; a loopback gateway does not verify keys (missing credentials don't block it) |
+| `models` | `[]` | optional static catalog override; empty fetches the pool from the gateway's `/v1/models` |
+| `streamIdleTimeoutMs` | `300000` | stream idle timeout (dsh-timeout helper) |
 | `retryPolicy` | dsh default | retry policy via `RetryPolicySchema` |
 
 ## What you get
 
-- **Model selection** — dsh's model picker shows the raincode pool
-  (`/v1/models`); the chosen model maps exactly to a gateway profile.
+- **Model selection** — dsh's model picker shows the raincode pool (fetched
+  from the gateway's `/v1/models`); the chosen model maps exactly to a gateway
+  profile.
 - **`/skills` browsing** — run `/skills` to list the raincode skill library,
   `/skills <name>` to read a skill's body. Data comes from the gateway's
   `/skills` endpoint (`~/.raincode/skills/`).
-- **Caching & retries** — prompt caching and retry/failover are handled by the
-  gateway per profile; nothing to configure in dsh.
+- **Caching & retries** — prompt caching (`sessionId` → `prompt_cache_key`) and
+  retry/failover are handled by the gateway per profile; nothing to configure
+  in dsh.
+- **Parallel tool calls** — tool calls stay separate blocks keyed by call
+  index; fragmented arguments accumulate per call.
 
 ## FAQ
 
 - **Gateway not running?** You'll see `TRANSPORT`-style errors from the model
   call. Start it with `raincode proxy --port 8787`.
-- **Why is the API key a formality?** The local gateway trusts loopback and
-  resolves the real upstream keys from `~/.raincode/profiles.toml`. Export
-  `RAINCODE_API_KEY` only to satisfy the dsh credential seam.
+- **Why is the API key a formality?** A loopback gateway trusts the machine and
+  resolves real upstream keys from `~/.raincode/profiles.toml` (inline, key
+  file, or env). The plugin only demands a credential when `baseURL` points at
+  a remote gateway.
 - **How do I add a model?** `raincode setup` (or edit `~/.raincode/profiles.toml`
   and restart the gateway).
 
 ## License
 
 MIT
+
+中文说明见 [README.zh.md](./README.zh.md).
