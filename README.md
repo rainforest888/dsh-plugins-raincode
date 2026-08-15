@@ -1,4 +1,4 @@
-# dsh-plugins-raincode
+# dsh-raincode
 
 Make **raincode** the model layer of **DeepSeek Harness (dsh)**: a cheap model pool
 with StablePrefix prompt caching, retries, and failover, driven by a local
