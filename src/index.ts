@@ -11,11 +11,28 @@ import {
   type RetryPolicyConfig,
 } from '@deepseek-ai/dsh-llm'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { RaincodeAdapter, type RaincodeConnectionOptions, type RaincodeModel } from './adapter.js'
+import { RaincodeAdapter, type RaincodeConnectionOptions } from './adapter.js'
 import { registerSkillsCommand } from './commands.js'
+import { registerCapabilityTools } from './tools.js'
+import { registerStatusTools } from './status.js'
+import { registerSkillTools } from './skill-tools.js'
+import { registerLearnTool } from './learn.js'
+import { registerRouteTools } from './route.js'
+import { registerAgentTreeTool } from './agent-tree.js'
+import {
+  createGatewayManager,
+  defaultProfileFor,
+  gatewayBin,
+  isLoopbackBaseURL,
+  pluginRegistryPath,
+  readDshCurrentModel,
+  syncProfiles,
+  writeRegistry,
+  type RaincodeProfile,
+} from './gateway.js'
 
 export const name = 'raincode'
-export const inject = ['llm', 'commands']
+export const inject = ['llm', 'commands', 'tools', 'subagents']
 
 const NS = settingsNamespace('raincode')
 const PROVIDER = 'raincode'
@@ -26,21 +43,38 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 export interface Config {
   baseURL?: string
   apiKeyEnv?: string
-  models?: RaincodeModel[]
+  profiles?: RaincodeProfile[]
+  spawnGateway?: boolean
+  gatewayBin?: string
+  mainModel?: string
+  subagentProvider?: string
+  maxDepth?: number
   streamIdleTimeoutMs?: number
   retryPolicy?: RetryPolicyConfig
 }
 
-const catalogModel = z.object({
+const profileSchema = z.object({
   id: z.string().required(),
   name: z.string(),
-  description: z.string(),
+  kind: z.string().default('openai-compat'),
+  baseURL: z.string().default(''),
+  model: z.string().required(),
+  apiKey: z.string().role('secret'),
+  apiKeyEnv: z.string().role('credential-ref'),
+  apiKeyFile: z.string(),
+  role: z.union([z.const('main'), z.const('subagent'), z.const('any')]).default('any'),
+  tags: z.array(z.string()).default([]),
 })
 
 export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
-  models: z.array(catalogModel).default([]),
+  profiles: z.array(profileSchema).default([]),
+  spawnGateway: z.boolean().default(true),
+  gatewayBin: z.string().default(''),
+  mainModel: z.string().default(''),
+  subagentProvider: z.string().default('spawn'),
+  maxDepth: z.natural().min(0).max(4).default(3),
   streamIdleTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   retryPolicy: RetryPolicySchema,
 })
@@ -52,21 +86,13 @@ function resolveConnection(config: Config): RaincodeConnectionOptions {
   }
   return {
     baseURL: config.baseURL ?? DEFAULT_BASE_URL,
-    models: config.models ?? [],
+    models: [],
     streamIdleTimeoutMs,
     retryPolicy: resolveRetryPolicy(config.retryPolicy, 'raincode: retryPolicy'),
   }
 }
 
-/** 本地 loopback gateway(baseURL 指向本机)不校验 key,凭据缺失时不阻塞。 */
-export function isLoopbackBaseURL(baseURL: string): boolean {
-  try {
-    const host = new URL(baseURL).hostname.toLowerCase()
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
-  } catch {
-    return false
-  }
-}
+export { isLoopbackBaseURL }
 
 export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
@@ -102,10 +128,7 @@ export function apply(ctx: Context, config: Config): void {
         return assertUsableApiKey(ambient.value, 'raincode', ref)
       }
     }
-    // 本地 loopback gateway 不校验 key:凭据缺失时给占位符而非 MISSING_CREDENTIAL,
-    // 否则「key 是摆设」的本地用法会被凭据接缝挡在门外。
     if (isLoopbackBaseURL(options().baseURL)) return 'raincode-local'
-    // 远端 gateway 仍需真实凭据。仍给出可操作报错。
     throw new LlmError(
       `raincode: no API key for provider route "${PROVIDER}"; store ${ref} through the credentials service, or export ${ref} in the launching environment (a local loopback gateway does not need one)`,
       'MISSING_CREDENTIAL',
@@ -121,7 +144,6 @@ export function apply(ctx: Context, config: Config): void {
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => { current = source },
     onChange: () => {
-      // retry policy 是注册期捕获的事实:变了就原地重注册同一 adapter 实例。
       const policy = options().retryPolicy
       if (deepEqualJson(policy, registeredPolicy)) return
       registration.replace([PROVIDER])
@@ -129,4 +151,129 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
   registerSkillsCommand(ctx, () => options().baseURL)
+
+  ctx.inject(['tools'], (toolsCtx) => {
+    registerCapabilityTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
+    registerStatusTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
+    registerSkillTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
+    registerLearnTool(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
+  })
+
+  const mainModel = (): string => {
+    const configured = current().mainModel ?? ''
+    if (configured !== '') return configured
+    const mainProfile = (current().profiles ?? []).find((p) => p.role === 'main')
+    if (mainProfile?.model !== undefined && mainProfile.model !== '') return mainProfile.model
+    const dshModel = readDshCurrentModel(ctx)
+    return dshModel?.model ?? ''
+  }
+
+  ctx.inject(['subagents', 'tools'], (routeCtx) => {
+    const scoped = routeCtx as unknown as {
+      subagents: {
+        start: (provider: string, request: unknown) => Promise<{
+          id: string
+          result: Promise<{ output: Array<{ type?: string; text?: string }>; stopReason?: string }>
+          dispose: () => Promise<void>
+        }>
+        listDescendants?: (rootSessionId: string, signal?: AbortSignal) => Promise<Array<{
+          id?: string
+          parentId?: string
+          depth?: number
+          label?: string
+          mode?: string
+          activity?: string
+          hasChildren?: boolean
+        }>>
+      }
+      tools: { register: (def: unknown) => unknown }
+    }
+    registerRouteTools(
+      { tools: scoped.tools },
+      () => ({
+        mainModel: mainModel(),
+        subagentProvider: current().subagentProvider ?? 'spawn',
+        defaultMaxDepth: current().maxDepth ?? 3,
+        subagents: scoped.subagents,
+      }),
+    )
+    registerAgentTreeTool({ tools: scoped.tools }, () => ({ subagents: scoped.subagents }))
+  })
+
+  // ── 无感绑定:dsh 当前交互模型 = raincode chat 模型 ──────────────────────
+  const baseURL = () => options().baseURL.replace(/\/+$/, '')
+  const manager = createGatewayManager(ctx, baseURL(), gatewayBin(current().gatewayBin), pluginRegistryPath())
+  ctx.effect(() => () => manager.killChild())
+
+  const profiles = (): RaincodeProfile[] => {
+    const configured = current().profiles ?? []
+    const byId = new Map<string, RaincodeProfile>()
+    for (const p of configured) byId.set(p.id, p)
+    const currentModel = readDshCurrentModel(ctx)
+    const fallback = defaultProfileFor(currentModel)
+    if (fallback !== undefined && !byId.has(fallback.id)) {
+      return [fallback, ...configured]
+    }
+    return configured
+  }
+
+  const ensureGatewayReady = async (): Promise<boolean> => {
+    if (!(current().spawnGateway ?? true)) return false
+    try {
+      // 先落 registry 文件再 spawn,避免 gateway 启动时读到旧/空文件。
+      await writeRegistry(pluginRegistryPath(), profiles())
+      await manager.ensure()
+      return true
+    } catch (error) {
+      ctx.logger.warn(`raincode: gateway unavailable: ${String((error as Error)?.message ?? error)}`)
+      return false
+    }
+  }
+
+  let lastSyncedProfiles = ''
+  const sync = async (): Promise<void> => {
+    const list = profiles()
+    const key = JSON.stringify(list)
+    if (key === lastSyncedProfiles) return
+    if (!(await ensureGatewayReady())) return
+    await syncProfiles(baseURL(), list)
+    lastSyncedProfiles = key
+  }
+
+  // dsh 当前模型变化时,重新绑定 chat 模型。
+  ctx.on('settings/updated', (ns: unknown) => {
+    if (String(ns) === settingsNamespace('agent-default-model')) {
+      lastSyncedProfiles = ''
+      void sync().catch((error) => ctx.logger.warn(`raincode: profile sync failed: ${String(error)}`))
+    }
+  })
+
+  // 接管 dsh 正在和用户交互的模型。仅接管普通对话请求;
+  // compaction / session-title 等辅助调用继续走原 provider。
+  ctx.on('llm/stream', (options, next) => {
+    if (options.provider === PROVIDER) {
+      // provider=raincode 的请求也必须先确保 gateway 已拉起
+      // (否则 raincode_route 启动的主控/子代理第一次调用会直接 TRANSPORT)。
+      return (async function* () {
+        try {
+          await sync()
+        } catch (error) {
+          ctx.logger.warn(`raincode: gateway prepare failed: ${String((error as Error)?.message ?? error)}`)
+        }
+        yield * next()
+      })()
+    }
+    if (options.purpose !== undefined) return next()
+    return (async function* () {
+      try {
+        await sync()
+        const known = new Set(profiles().map((p) => p.model))
+        if (!known.has(options.model)) return yield * next()
+        yield * adapter.stream(options)
+      } catch (error) {
+        ctx.logger.warn(`raincode: falling back to original provider: ${String((error as Error)?.message ?? error)}`)
+        yield * next()
+      }
+    })()
+  })
 }

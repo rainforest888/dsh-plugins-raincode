@@ -44,6 +44,44 @@ beforeAll(async () => {
         ] }))
         return
       }
+      if (req.url === '/requests') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ requests: [
+          {
+            id: 'req-1',
+            time: '2025-01-01T00:00:00.000Z',
+            model: 'deepseek-v4-flash',
+            session_id: 'sess-123456789012345',
+            purpose: 'chat',
+            status: 'completed',
+            duration_ms: 321,
+            finish_reason: 'stop',
+            usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+          },
+        ] }))
+        return
+      }
+      if (req.url === '/capabilities/refresh') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          model: 'deepseek-v4-pro',
+          confidence: 'high',
+          sources: ['openrouter', 'deepswe', 'official-report'],
+          capability: { main: 0.72, coding: 0.68, agentic: 0.62 },
+          directions: { frontend: 0.71, backend: 0.6 },
+          benchmarks: { deepswe_pass1: 63, hle: 37.7 },
+        }))
+        return
+      }
+      if (req.url === '/learn') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          ok: true,
+          review: true,
+          skill: { name: 'learned-probe', category: 'learned', description: 'probe skill', body: '1. do\n2. check\n' },
+        }))
+        return
+      }
       res.writeHead(404).end()
     })
   })
@@ -64,7 +102,7 @@ interface RegisteredCommand {
 
 type DisposableFiber = { dispose: () => Promise<void> }
 
-async function startHarness(): Promise<{ ctx: Context; commands: RegisteredCommand[]; dispose: () => Promise<void> }> {
+async function startHarness(): Promise<{ ctx: Context; commands: RegisteredCommand[]; registeredTools: Array<{ name: string; execute: (args: Record<string, unknown>, exec?: { agent?: unknown; signal?: AbortSignal }) => Promise<{ text: string }> }>; subagentStarts: Array<{ provider: string; request: Record<string, unknown> }>; dispose: () => Promise<void> }> {
   const ctx = new Context()
   const fibers: DisposableFiber[] = []
   fibers.push(ctx.plugin(LlmService) as unknown as DisposableFiber)
@@ -75,16 +113,38 @@ async function startHarness(): Promise<{ ctx: Context; commands: RegisteredComma
       return () => {}
     },
   })
+  const registeredTools: Array<{ name: string; execute: (args: Record<string, unknown>, exec?: { agent?: unknown; signal?: AbortSignal }) => Promise<{ text: string }> }> = []
+  ctx.provide('tools', {
+    register: (def: { name: string; execute: (args: Record<string, unknown>, exec?: { agent?: unknown; signal?: AbortSignal }) => Promise<{ text: string }> }) => {
+      registeredTools.push(def)
+      return () => {}
+    },
+  })
+  const subagentStarts: Array<{ provider: string; request: Record<string, unknown> }> = []
+  ctx.provide('subagents', {
+    start: async (provider: string, request: Record<string, unknown>) => {
+      subagentStarts.push({ provider, request })
+      return {
+        id: 'raincode-route-run',
+        result: Promise.resolve({ output: [{ type: 'text', text: 'orchestrator done' }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+    listDescendants: async () => [
+      { id: 'child-a', parentId: 'root', depth: 1, label: 'frontend agent', mode: 'one-shot', activity: 'running', hasChildren: true },
+      { id: 'grand-a1', parentId: 'child-a', depth: 2, label: 'css grand agent', mode: 'continuable', activity: 'inactive', hasChildren: false },
+    ],
+  })
   // 与 dsh 加载器一致:Config schema 校验 + apply。
   const fiber = await ctx.plugin(
     { name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply },
-    { baseURL: `http://127.0.0.1:${port}`, apiKeyEnv: 'TEST_RAINCODE_KEY', models: [], streamIdleTimeoutMs: 5000 },
+    { baseURL: `http://127.0.0.1:${port}`, apiKeyEnv: 'TEST_RAINCODE_KEY', mainModel: 'deepseek-v4-pro', streamIdleTimeoutMs: 5000 },
   )
   fibers.push(fiber as unknown as DisposableFiber)
   const dispose = async (): Promise<void> => {
     for (const f of fibers) await f.dispose()
   }
-  return { ctx, commands, dispose }
+  return { ctx, commands, registeredTools, subagentStarts, dispose }
 }
 
 describe('plugin in a real dsh context', () => {
@@ -134,6 +194,64 @@ describe('plugin in a real dsh context', () => {
     }
   })
 
+  it('registers raincode_refresh_model for natural-language capability lookup', async () => {
+    const { registeredTools, dispose } = await startHarness()
+    try {
+      const tool = registeredTools.find((t) => t.name === 'raincode_refresh_model')
+      expect(tool).toBeDefined()
+      const result = await tool!.execute({ model: 'deepseek-v4-pro' })
+      expect(result.text).toContain('deepseek-v4-pro')
+      expect(result.text).toContain('coding=0.68')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('registers raincode_agent_tree with parent-child relations', async () => {
+    const { registeredTools, dispose } = await startHarness()
+    try {
+      const tool = registeredTools.find((t) => t.name === 'raincode_agent_tree')
+      expect(tool).toBeDefined()
+      const result = await tool!.execute({}, { agent: { id: 'root' }, signal: new AbortController().signal })
+      expect(result.text).toContain('frontend agent')
+      expect(result.text).toContain('css grand agent')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('registers raincode_learn backed by the gateway', async () => {
+    const { registeredTools, dispose } = await startHarness()
+    try {
+      const tool = registeredTools.find((t) => t.name === 'raincode_learn')
+      expect(tool).toBeDefined()
+      const result = await tool!.execute({ task: 'probe task', transcript: 'worked: probe' })
+      expect(result.text).toContain('learned-probe')
+      expect(result.text).toContain('1. do')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('registers raincode_route backed by the dsh subagent seam', async () => {
+    const { registeredTools, subagentStarts, dispose } = await startHarness()
+    try {
+      const tool = registeredTools.find((t) => t.name === 'raincode_route')
+      expect(tool).toBeDefined()
+      const parent = { id: 'parent-agent' }
+      const result = await tool!.execute({ prompt: 'build a large web app', maxDepth: 3 }, { agent: parent, signal: new AbortController().signal })
+      expect(result.text).toContain('orchestrator done')
+      expect(subagentStarts).toHaveLength(1)
+      expect(subagentStarts[0].provider).toBe('spawn')
+      expect(subagentStarts[0].request).toMatchObject({
+        agentOptions: { provider: 'raincode', model: 'deepseek-v4-pro' },
+        maxDepth: 3,
+      })
+    } finally {
+      await dispose()
+    }
+  })
+
   it('registers the /skills command backed by the gateway', async () => {
     const { commands, dispose } = await startHarness()
     try {
@@ -144,6 +262,32 @@ describe('plugin in a real dsh context', () => {
       expect((list as { text: string }).text).toContain('probe')
       const detail = await cmd!.handler({ rawInput: 'probe', signal: new AbortController().signal } as CommandInvocation)
       expect((detail as { text: string }).text).toContain('# Probe')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('registers raincode_status and raincode skill tools backed by the gateway', async () => {
+    const { registeredTools, dispose } = await startHarness()
+    try {
+      expect(registeredTools.map((t) => t.name)).toEqual(
+        expect.arrayContaining(['raincode_status', 'raincode_skill_search', 'raincode_skill_load']),
+      )
+
+      const status = registeredTools.find((t) => t.name === 'raincode_status')
+      expect(status).toBeDefined()
+      const statusResult = await status!.execute({})
+      expect(statusResult.text).toContain('deepseek-v4-flash')
+
+      const search = registeredTools.find((t) => t.name === 'raincode_skill_search')
+      expect(search).toBeDefined()
+      const searchResult = await search!.execute({ query: 'probe' })
+      expect(searchResult.text).toContain('probe')
+
+      const load = registeredTools.find((t) => t.name === 'raincode_skill_load')
+      expect(load).toBeDefined()
+      const loadResult = await load!.execute({ name: 'probe' })
+      expect(loadResult.text).toContain('# Probe')
     } finally {
       await dispose()
     }

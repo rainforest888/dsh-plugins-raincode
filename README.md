@@ -35,6 +35,19 @@ model logic.
 
    Verify: `curl http://127.0.0.1:8787/health` → `{"ok":true,"service":"raincode-gateway"}`.
 
+## Required dsh subagent plugins
+
+`raincode_route` depends on the dsh **subagent seam**. Your dsh profile/preset must have:
+
+- the model-facing `subagent` tool (from `@deepseek-ai/dsh-tool-subagent`, provider name `spawn`);
+- the matching provider (`@deepseek-ai/dsh-subagent-spawn-in-process`, registered as `spawn`).
+
+The standard DeepSeek Harness preset ships these rows; a custom preset needs at least:
+- `tool-subagent` (provider: spawn)
+- `subagent-spawn-in-process`
+
+Without them the raincode plugin cannot load (it injects `subagents` explicitly).
+
 ## Install in dsh
 
 ```bash
@@ -57,6 +70,21 @@ profile):
 `dsh --profile web --dump-config` should show the raincode row; restart
 `dsh web` to load it.
 
+## Tools
+
+| Tool | When |
+|---|---|
+| `raincode_route` | User explicitly asks, or the task is clearly large (multi-module/multi-direction/long-running) — chat asks the user first. Do not call for small tasks |
+| `raincode_agent_tree` | User asks which subagent launched which grand-subagents |
+| `raincode_refresh_model` | User says "check the capability of model X" |
+| `raincode_learn` | User says "learn this task / distill it into a skill" |
+| `raincode_status` | User asks for raincode status / subagent work / token usage |
+| `raincode_skill_search` / `raincode_skill_load` | Use the raincode skill network |
+
+`raincode_route` flow: chat calls the tool → the plugin starts a one-shot subagent through dsh `subagents.start`, using the raincode main model (`mainModel`); that main agent then dispatches subagents/grand-subagents through dsh's native subagent tools.
+
+Grand-subagent UI follows the native dsh subagent experience: the Web UI session-header subagent catalog expands level by level (parent → child → grandchild), each row shows its direct descendant count, and clicking any depth opens that child. raincode keeps every level on the native dsh subagent seam, so parent-child relations and display are maintained by dsh itself.
+
 ## Configuration
 
 | Field | Default | Meaning |
@@ -64,6 +92,10 @@ profile):
 | `baseURL` | `http://127.0.0.1:8787` | raincode gateway address |
 | `apiKeyEnv` | `RAINCODE_API_KEY` | dsh credential seam only; a loopback gateway does not verify keys (missing credentials don't block it) |
 | `models` | `[]` | optional static catalog override; empty fetches the pool from the gateway's `/v1/models` |
+| `profiles` | `[]` | model pool; each profile can set `role: main/subagent/any` and direction `tags` |
+| `mainModel` | empty | raincode main model; empty auto-picks a `role=main` profile, then falls back to the dsh current model |
+| `subagentProvider` | `spawn` | dsh subagent provider name (must be registered) |
+| `maxDepth` | `3` | maximum delegation depth for `raincode_route` (subagent → grand-subagent → great-grand-subagent) |
 | `streamIdleTimeoutMs` | `300000` | stream idle timeout (dsh-timeout helper) |
 | `retryPolicy` | dsh default | retry policy via `RetryPolicySchema` |
 
@@ -82,6 +114,8 @@ profile):
   index; fragmented arguments accumulate per call.
 
 ## FAQ
+
+- **raincode_route unavailable?** Check that your profile/preset enables the `subagent` tool and the `spawn` provider (see Required dsh subagent plugins).
 
 - **Gateway not running?** You'll see `TRANSPORT`-style errors from the model
   call. Start it with `raincode proxy --port 8787`.
