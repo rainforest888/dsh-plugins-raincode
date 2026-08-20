@@ -1,8 +1,8 @@
 # @raincode-dsh/core
 
-Shared adapter core for the raincode dsh plugins. This package is **not** published
-standalone — it is a workspace dependency used by `dsh-plugins-raincode-skill` and
-`dsh-plugins-raincode-routing`.
+Shared adapter core for the raincode dsh plugins. Published to npm so
+`dsh-plugins-raincode-skill` and `dsh-plugins-raincode-routing` can resolve it as a
+dependency.
 
 ## Contents
 

@@ -11,7 +11,7 @@ prompt 缓存 + 重试/故障转移，由本地 OpenAI 兼容网关驱动。
 |---|---|---|
 | [`dsh-plugins-raincode-skill`](./packages/plugin-skill) | **skill 自进化网络**——浏览 / 搜索 / 加载 raincode 技能，并把经验沉淀为 SKILL.md | `/skills`、`raincode_skill_search`、`raincode_skill_load`、`raincode_learn` |
 | [`dsh-plugins-raincode-routing`](./packages/plugin-routing) | **模型自动路由**——用强主控模型按方向派发低价子代理 | `raincode_route`、`raincode_agent_tree`、`raincode_refresh_model`、`raincode_status` |
-| [`@raincode-dsh/core`](./packages/core) | 共享适配核心（OpenAI wire 序列化、SSE 翻译、网关自动拉起）——不单独发布 | — |
+| [`@raincode-dsh/core`](./packages/core) | 共享适配核心（OpenAI wire 序列化、SSE 翻译、网关自动拉起）——发布供两个插件独立解析 | — |
 
 ## 目录
 

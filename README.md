@@ -13,7 +13,7 @@ plugins**, sharing the adapter core in `packages/core`.
 |---|---|---|
 | [`dsh-plugins-raincode-skill`](./packages/plugin-skill) | **skill 自进化网络** — browse / search / load raincode skills and distill experience into SKILL.md | `/skills`, `raincode_skill_search`, `raincode_skill_load`, `raincode_learn` |
 | [`dsh-plugins-raincode-routing`](./packages/plugin-routing) | **模型自动路由** — orchestrates a strong main model that dispatches cheaper subagents by direction | `raincode_route`, `raincode_agent_tree`, `raincode_refresh_model`, `raincode_status` |
-| [`@raincode-dsh/core`](./packages/core) | shared adapter (OpenAI wire serialization, SSE translate, gateway auto-spawn) — not published standalone | — |
+| [`@raincode-dsh/core`](./packages/core) | shared adapter (OpenAI wire serialization, SSE translate, gateway auto-spawn) — published so the two plugins can resolve it independently | — |
 
 ## Layout
 

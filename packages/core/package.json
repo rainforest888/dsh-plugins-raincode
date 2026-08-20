@@ -16,6 +16,9 @@
     "lib",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
