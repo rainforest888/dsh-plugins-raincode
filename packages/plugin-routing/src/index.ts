@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { installSettingsSection, settingsNamespace, deepEqualJson } from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import {
   assertUsableApiKey,
@@ -11,14 +11,6 @@ import {
   type RetryPolicyConfig,
 } from '@deepseek-ai/dsh-llm'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { RaincodeAdapter, type RaincodeConnectionOptions } from './adapter.js'
-import { registerSkillsCommand } from './commands.js'
-import { registerCapabilityTools } from './tools.js'
-import { registerStatusTools } from './status.js'
-import { registerSkillTools } from './skill-tools.js'
-import { registerLearnTool } from './learn.js'
-import { registerRouteTools } from './route.js'
-import { registerAgentTreeTool } from './agent-tree.js'
 import {
   createGatewayManager,
   defaultProfileFor,
@@ -28,13 +20,19 @@ import {
   readDshCurrentModel,
   syncProfiles,
   writeRegistry,
+  RaincodeAdapter,
+  type RaincodeConnectionOptions,
   type RaincodeProfile,
-} from './gateway.js'
+} from '@raincode-dsh/core'
+import { registerRouteTools } from './route.js'
+import { registerAgentTreeTool } from './agent-tree.js'
+import { registerCapabilityTools } from './tools.js'
+import { registerStatusTools } from './status.js'
 
-export const name = 'raincode'
+export const name = 'raincode-routing'
 export const inject = ['llm', 'commands', 'tools', 'subagents']
 
-const NS = settingsNamespace('raincode')
+const NS = settingsNamespace('raincode-routing')
 const PROVIDER = 'raincode'
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8787'
 const DEFAULT_API_KEY_ENV = 'RAINCODE_API_KEY'
@@ -95,29 +93,11 @@ function resolveConnection(config: Config): RaincodeConnectionOptions {
 export { isLoopbackBaseURL }
 
 export function apply(ctx: Context, config: Config): void {
-  let current: () => Config = () => config
-  let lastRaw: Config | undefined
-  let lastGood: RaincodeConnectionOptions | undefined
-  const options = (): RaincodeConnectionOptions => {
-    const raw = current()
-    if (raw === lastRaw && lastGood !== undefined) return lastGood
-    try {
-      const next = resolveConnection(raw)
-      lastRaw = raw
-      lastGood = next
-      return next
-    } catch (error) {
-      if (lastGood === undefined) throw error
-      lastRaw = raw
-      ctx.logger.error('raincode: keeping the last good configuration after an invalid settings section')
-      ctx.logger.error(error)
-      return lastGood
-    }
-  }
-  options()
+  const baseURL = (): string => resolveConnection(config).baseURL.replace(/\/+$/, '')
+  const options = (): RaincodeConnectionOptions => resolveConnection(config)
 
   const resolveApiKey = async (): Promise<string> => {
-    const ref = credentialRef(current().apiKeyEnv ?? DEFAULT_API_KEY_ENV)
+    const ref = credentialRef(config.apiKeyEnv ?? DEFAULT_API_KEY_ENV)
     const credentials = ctx.get('credentials')
     if (credentials !== undefined) {
       const hit = await credentials.resolve(ref)
@@ -137,12 +117,12 @@ export function apply(ctx: Context, config: Config): void {
 
   const adapter = new RaincodeAdapter({ options, resolveApiKey })
   ctx.llm.registerConfigurableProviders([
-    { provider: PROVIDER, displayName: 'Raincode', settingsNs: NS, settingsPath: [] },
+    { provider: PROVIDER, displayName: 'Raincode (routing)', settingsNs: NS, settingsPath: [] },
   ])
   const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
   let registeredPolicy = options().retryPolicy
   installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => { current = source },
+    setSource: (source) => { config = source() },
     onChange: () => {
       const policy = options().retryPolicy
       if (deepEqualJson(policy, registeredPolicy)) return
@@ -150,19 +130,17 @@ export function apply(ctx: Context, config: Config): void {
       registeredPolicy = policy
     },
   })
-  registerSkillsCommand(ctx, () => options().baseURL)
 
   ctx.inject(['tools'], (toolsCtx) => {
-    registerCapabilityTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
-    registerStatusTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
-    registerSkillTools(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
-    registerLearnTool(toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }, () => options().baseURL)
+    const tools = (toolsCtx as unknown as { tools: { register: (def: unknown) => unknown } }).tools
+    registerCapabilityTools({ tools }, () => baseURL())
+    registerStatusTools({ tools }, () => baseURL())
   })
 
   const mainModel = (): string => {
-    const configured = current().mainModel ?? ''
+    const configured = config.mainModel ?? ''
     if (configured !== '') return configured
-    const mainProfile = (current().profiles ?? []).find((p) => p.role === 'main')
+    const mainProfile = (config.profiles ?? []).find((p) => p.role === 'main')
     if (mainProfile?.model !== undefined && mainProfile.model !== '') return mainProfile.model
     const dshModel = readDshCurrentModel(ctx)
     return dshModel?.model ?? ''
@@ -177,13 +155,8 @@ export function apply(ctx: Context, config: Config): void {
           dispose: () => Promise<void>
         }>
         listDescendants?: (rootSessionId: string, signal?: AbortSignal) => Promise<Array<{
-          id?: string
-          parentId?: string
-          depth?: number
-          label?: string
-          mode?: string
-          activity?: string
-          hasChildren?: boolean
+          id?: string; parentId?: string; depth?: number; label?: string
+          mode?: string; activity?: string; hasChildren?: boolean
         }>>
       }
       tools: { register: (def: unknown) => unknown }
@@ -192,35 +165,31 @@ export function apply(ctx: Context, config: Config): void {
       { tools: scoped.tools },
       () => ({
         mainModel: mainModel(),
-        subagentProvider: current().subagentProvider ?? 'spawn',
-        defaultMaxDepth: current().maxDepth ?? 3,
+        subagentProvider: config.subagentProvider ?? 'spawn',
+        defaultMaxDepth: config.maxDepth ?? 3,
         subagents: scoped.subagents,
       }),
     )
     registerAgentTreeTool({ tools: scoped.tools }, () => ({ subagents: scoped.subagents }))
   })
 
-  // ── 无感绑定:dsh 当前交互模型 = raincode chat 模型 ──────────────────────
-  const baseURL = () => options().baseURL.replace(/\/+$/, '')
-  const manager = createGatewayManager(ctx, baseURL(), gatewayBin(current().gatewayBin), pluginRegistryPath())
+  // gateway 自动拉起 + registry 同步 + 接管 dsh chat 模型。
+  const manager = createGatewayManager(ctx, baseURL(), gatewayBin(config.gatewayBin), pluginRegistryPath())
   ctx.effect(() => () => manager.killChild())
 
   const profiles = (): RaincodeProfile[] => {
-    const configured = current().profiles ?? []
+    const configured = config.profiles ?? []
     const byId = new Map<string, RaincodeProfile>()
     for (const p of configured) byId.set(p.id, p)
     const currentModel = readDshCurrentModel(ctx)
     const fallback = defaultProfileFor(currentModel)
-    if (fallback !== undefined && !byId.has(fallback.id)) {
-      return [fallback, ...configured]
-    }
+    if (fallback !== undefined && !byId.has(fallback.id)) return [fallback, ...configured]
     return configured
   }
 
   const ensureGatewayReady = async (): Promise<boolean> => {
-    if (!(current().spawnGateway ?? true)) return false
+    if (!(config.spawnGateway ?? true)) return false
     try {
-      // 先落 registry 文件再 spawn,避免 gateway 启动时读到旧/空文件。
       await writeRegistry(pluginRegistryPath(), profiles())
       await manager.ensure()
       return true
@@ -240,7 +209,6 @@ export function apply(ctx: Context, config: Config): void {
     lastSyncedProfiles = key
   }
 
-  // dsh 当前模型变化时,重新绑定 chat 模型。
   ctx.on('settings/updated', (ns: unknown) => {
     if (String(ns) === settingsNamespace('agent-default-model')) {
       lastSyncedProfiles = ''
@@ -248,28 +216,22 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  // 接管 dsh 正在和用户交互的模型。仅接管普通对话请求;
-  // compaction / session-title 等辅助调用继续走原 provider。
-  ctx.on('llm/stream', (options, next) => {
-    if (options.provider === PROVIDER) {
-      // provider=raincode 的请求也必须先确保 gateway 已拉起
-      // (否则 raincode_route 启动的主控/子代理第一次调用会直接 TRANSPORT)。
+  ctx.on('llm/stream', (streamOptions, next) => {
+    if (streamOptions.provider === PROVIDER) {
       return (async function* () {
-        try {
-          await sync()
-        } catch (error) {
+        try { await sync() } catch (error) {
           ctx.logger.warn(`raincode: gateway prepare failed: ${String((error as Error)?.message ?? error)}`)
         }
         yield * next()
       })()
     }
-    if (options.purpose !== undefined) return next()
+    if (streamOptions.purpose !== undefined) return next()
     return (async function* () {
       try {
         await sync()
         const known = new Set(profiles().map((p) => p.model))
-        if (!known.has(options.model)) return yield * next()
-        yield * adapter.stream(options)
+        if (!known.has(streamOptions.model)) return yield * next()
+        yield * adapter.stream(streamOptions)
       } catch (error) {
         ctx.logger.warn(`raincode: falling back to original provider: ${String((error as Error)?.message ?? error)}`)
         yield * next()
