@@ -129,7 +129,8 @@ under those ids.
 On dsh `0.2.2-rc.1` (desktop profile, Node 24.21.0):
 
 - `npm run typecheck` — no errors in any workspace package.
-- `npm test` — 53 tests pass (core 29, plugin-routing 14, plugin-skill 10).
+- `npm test` — 55 tests pass (core 31, plugin-routing 14, plugin-skill 10).
+- `cargo build --release` — the gateway binary builds in ~70 s.
 - `dsh plugin --profile rc-test add "link:<repo>/packages/plugin-routing"
   "link:<repo>/packages/plugin-skill"` installs into a throwaway profile.
 - `dsh --profile rc-test --dump-config` lists the two loader entries with the
@@ -137,6 +138,14 @@ On dsh `0.2.2-rc.1` (desktop profile, Node 24.21.0):
   profile directory resolves every peer dependency.
 - Gateway binary discovery, loopback detection and the plugin registry path are
   covered by unit tests (`packages/core/src/gateway.spec.ts`).
+- Smoke test against the real binary: `raincode proxy --port 8799` answers
+  `GET /health` with `{"ok":true,"service":"raincode-gateway"}`, and a registry
+  written by `writeRegistry()` is parsed by the gateway (`GET /v1/models` lists the
+  configured pool profile). This exercises the cross-half contract the plugins rely
+  on: plugin TOML writer → gateway parser → OpenAI-compatible model list.
+- Bug found by the smoke test and fixed: `writeRegistry()` did not create its parent
+  directory, so the first gateway start from a fresh profile failed with ENOENT
+  before spawning. It now `mkdir -p`s the registry directory (covered by tests).
 
 Not covered by automated tests: launching the Electron app end to end. `dsh
 <app>` starts the GUI and blocks, so validation is done through `--dump-config`,

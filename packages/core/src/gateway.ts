@@ -80,7 +80,9 @@ function tomlString(value: string): string {
 }
 
 /** 生成极简 TOML registry,供 `raincode proxy --registry-path` 启动使用。 */
-export function writeRegistry(path: string, profiles: RaincodeProfile[]): Promise<void> {
+export async function writeRegistry(path: string, profiles: RaincodeProfile[]): Promise<void> {
+  // 首次使用时插件 registry 目录还不存在：先建目录，否则拉起网关前的同步会 ENOENT。
+  await mkdir(dirname(path), { recursive: true })
   const lines: string[] = []
   for (const p of profiles) {
     lines.push('[[profiles]]')
