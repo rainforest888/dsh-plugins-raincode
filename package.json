@@ -12,7 +12,10 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "backend:build": "cargo build --release",
+    "backend:test": "cargo test --workspace",
+    "backend:clippy": "cargo clippy --workspace --all-targets -- -D warnings"
   },
   "license": "MIT"
 }
