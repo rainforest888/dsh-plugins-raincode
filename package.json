@@ -2,7 +2,7 @@
   "name": "dsh-plugins-raincode-monorepo",
   "private": true,
   "description": "Monorepo: raincode — the model layer of DeepSeek Harness — as two independently publishable dsh plugins (skill self-evolution network + model auto-routing).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "workspaces": [
     "packages/core",

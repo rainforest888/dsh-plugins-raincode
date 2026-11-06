@@ -1,7 +1,7 @@
 # dsh-plugins-raincode-routing
 
 **Model auto-routing** inside DeepSeek Harness (dsh). `raincode_route` starts a
-strong main model (through dsh's native subagent seam) that decomposes a large task
+strong main model (through dsh's native subagent seam via `subagents.startActivation`) that decomposes a large task
 and dispatches cheaper subagents by direction. The plugin is the "mouth" — it talks
 to the raincode gateway; the gateway (Rust) owns model-pool selection, capability
 profiles, and routing.
@@ -21,27 +21,34 @@ This is one of the two raincode plugins split from the monorepo. The other one,
 `raincode_route` flow: the chat model calls the tool → the plugin starts a one-shot
 subagent through dsh `subagents.start` using the raincode main model (`mainModel`);
 that main agent then dispatches subagents/grand-subagents through dsh's native
-subagent tools. Delegation depth is capped by `maxDepth`.
+subagent tools. The activation is always disposed in `finally`. Delegation depth is capped by `maxDepth`.
 
-The plugin also registers a `raincode` provider and can take over dsh's current chat
-model, mapping it to a matching raincode pool profile.
+The plugin registers the `raincode` provider and adapter (the skill plugin does not,
+so installing both never declares the provider twice) and can take over dsh chat
+requests whose model is in the pool.
 
 ## Prerequisites
 
 1. A **raincode gateway** (Rust) implementing `/v1/models`, `PUT /profiles`, and
    `/capabilities/refresh`, reachable at the configured `baseURL`.
-2. `raincode` available on `PATH` (or `RAINCODE_BIN`) for gateway auto-spawn.
+2. dsh `>= 0.2.2-rc.1`.
+3. For gateway auto-spawn, a `raincode` binary reachable via the `gatewayBin`
+   setting, `RAINCODE_BIN`, this repo's `target/release/`, `~/.raincode/bin`, or
+   `PATH`.
 3. Your dsh profile/preset must enable the `subagent` tool (provider `spawn`) and the
    `subagent-spawn-in-process` provider, otherwise `raincode_route` cannot start agents.
 
 ## Install in dsh
 
+Requires dsh `>= 0.2.2-rc.1`. In a checkout:
+
 ```bash
-dsh plugin --profile web add dsh-plugins-raincode-routing
+dsh plugin --profile my-profile add "link:$PWD"
 ```
 
-Add a row to the profile's patch layer and point `baseURL` at your raincode gateway.
-Restart `dsh web` to load it.
+The package ships `cordis.patch.yml` (declared via `dsh.bundle.patch`), so the loader
+row is inserted automatically; verify with
+`dsh --profile my-profile --dump-config`.
 
 ## Configuration
 
@@ -53,7 +60,7 @@ Restart `dsh web` to load it.
 | `subagentProvider` | `spawn` | dsh subagent provider name |
 | `maxDepth` | `3` | max delegation depth for `raincode_route` |
 | `spawnGateway` | `true` | auto-start `raincode proxy` on load |
-| `gatewayBin` | `RAINCODE_BIN` / `raincode` | gateway executable for auto-spawn |
+| `gatewayBin` | auto-detected | gateway executable; empty = detect via `RAINCODE_BIN` / repo build / `~/.raincode/bin` / `PATH` |
 | `streamIdleTimeoutMs` | `300000` | stream idle timeout |
 | `retryPolicy` | dsh default | retry policy for model calls |
 

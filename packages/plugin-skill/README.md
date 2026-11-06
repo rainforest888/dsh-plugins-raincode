@@ -18,36 +18,38 @@ This is one of the two raincode plugins split from the monorepo. The other one,
 | `raincode_learn` | Distill the current session into a SKILL.md (goes to the review area; you approve before it's active) |
 | `raincode_status` | Query recent model calls / cached capability profiles / model-pool profiles (skill side) |
 
-The plugin also registers a `raincode` model provider so you can select a raincode
-pool model to talk to while browsing skills.
+The `raincode` model provider/adapter is registered by `dsh-plugins-raincode-routing`;
+this plugin only adds the skill network, so both can be installed together without a
+duplicate-provider conflict.
 
 ## Prerequisites
 
 1. A **raincode gateway** (Rust) that implements `/skills` and `/learn`, reachable at
    the configured `baseURL` (default `http://127.0.0.1:8787`).
-2. `raincode` available on `PATH` (or `RAINCODE_BIN`) if you want the plugin to
-   auto-spawn the gateway (`spawnGateway: true`).
+2. dsh `>= 0.2.2-rc.1`.
+3. For auto-spawn, a `raincode` binary discoverable via `gatewayBin` / `RAINCODE_BIN` /
+   repo `target/release` / `~/.raincode/bin` / `PATH`.
 3. Optionally configure raincode profiles with `raincode setup`.
 
 ## Install in dsh
 
+Requires dsh `>= 0.2.2-rc.1`. In a checkout:
+
 ```bash
-dsh plugin --profile web add dsh-plugins-raincode-skill
+dsh plugin --profile my-profile add "link:$PWD"
 ```
 
-Then add a row to the profile's patch layer and set its `baseURL` to your raincode
-gateway. Restart `dsh web` to load it.
+The package ships `cordis.patch.yml` (declared via `dsh.bundle.patch`), so the loader
+row is inserted automatically; verify with
+`dsh --profile my-profile --dump-config`.
 
 ## Configuration
 
 | Field | Default | Meaning |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8787` | raincode gateway address |
-| `apiKeyEnv` | `RAINCODE_API_KEY` | dsh credential seam only; a loopback gateway does not verify keys |
-| `spawnGateway` | `true` | auto-start `raincode proxy` on plugin load |
-| `gatewayBin` | `RAINCODE_BIN` / `raincode` | executable used to spawn the gateway |
-| `streamIdleTimeoutMs` | `300000` | stream idle timeout |
-| `retryPolicy` | dsh default | retry policy for model calls |
+| `spawnGateway` | `true` | auto-start `raincode proxy` when a skill call needs it |
+| `gatewayBin` | auto-detected | gateway executable; empty = detect via `RAINCODE_BIN` / repo build / `~/.raincode/bin` / `PATH` |
 
 ## License
 

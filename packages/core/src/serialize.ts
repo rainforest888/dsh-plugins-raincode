@@ -1,5 +1,5 @@
 import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, GenerateOptions, Message, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, RequestMessage, ToolSchema } from '@deepseek-ai/dsh-llm'
 
 function flattenText(blocks: readonly { type: string; text?: string }[]): string {
   return blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')
@@ -13,7 +13,7 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
 }
 
 /** 序列化 assistant 消息:文本 + reasoning 回放(仅 tool-call 轮)+ tool_calls。 */
-function serializeAssistant(message: Message): Record<string, unknown> {
+function serializeAssistant(message: { content: readonly ContentBlock[] }): Record<string, unknown> {
   const text = flattenText(message.content)
   const reasoning = message.content
     .filter((b) => b.type === 'reasoning')
@@ -33,29 +33,40 @@ function serializeAssistant(message: Message): Record<string, unknown> {
 }
 
 /**
- * 序列化对话:每个 tool-result 展开为独立的 `{role:'tool'}` 消息(dsh 把每个
- * 工具结果放在独立 user 消息里);混合 user 消息先贡献文本,工具结果随后。
+ * 序列化对话。DSH 0.2.x 的消息模型与旧版不同:
+ * - 工具结果不再是 user 消息里的 `tool-result` 块,而是独立的 `role:'tool'` 消息
+ *   (带 `toolCallId`),因此每个 tool 消息直接铺平成一条 OpenAI `role:'tool'`。
+ * - 工具增删以 `role:'developer'` 消息表达。OpenAI 兼容 wire 没有对应槽位,且本次
+ *   请求的 `options.tools` 已经是当前工具声明的完整快照,所以这里显式丢弃这些
+ *   元事件(与 dsh 对"不支持动态工具的 route"的投影结果一致)。
+ * - system/user/assistant 保持原语义;空的 user 文本块序列会被丢弃,避免上游以
+ *   空 content 拒绝请求。
  */
-function serializeMessages(messages: Message[]): Record<string, unknown>[] {
+function serializeMessages(messages: readonly RequestMessage[]): Record<string, unknown>[] {
   const wire: Record<string, unknown>[] = []
   for (const message of messages) {
     assertTextOnly(message.content)
-    if (message.role === 'system') {
-      wire.push({ role: 'system', content: flattenText(message.content) })
-      continue
-    }
-    if (message.role === 'assistant') {
-      wire.push(serializeAssistant(message))
-      continue
-    }
-    const toolResults = message.content.filter((b) => b.type === 'tool-result')
-    const text = flattenText(message.content)
-    if (text.length > 0 || toolResults.length === 0) {
-      wire.push({ role: 'user', content: text })
-    }
-    for (const result of toolResults) {
-      const tr = result as { toolCallId: string; content: readonly { type: string; text?: string }[] }
-      wire.push({ role: 'tool', tool_call_id: tr.toolCallId, content: flattenText(tr.content) || '(no output)' })
+    switch (message.role) {
+      case 'system':
+        wire.push({ role: 'system', content: flattenText(message.content) })
+        break
+      case 'developer':
+        break
+      case 'assistant':
+        wire.push(serializeAssistant(message))
+        break
+      case 'tool':
+        wire.push({
+          role: 'tool',
+          tool_call_id: message.toolCallId,
+          content: flattenText(message.content) || '(no output)',
+        })
+        break
+      default: {
+        const text = flattenText(message.content)
+        if (text.length > 0) wire.push({ role: 'user', content: text })
+        break
+      }
     }
   }
   return wire

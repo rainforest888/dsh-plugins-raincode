@@ -7,8 +7,8 @@
  * 由主控模型自己继续拆解、派发子代理/孙代理。
  */
 
-interface SubagentRunLike {
-  id: string
+interface SubagentActivationLike {
+  childId: string
   result: Promise<{
     output: Array<{ type?: string; text?: string }>
     stopReason?: string
@@ -21,14 +21,20 @@ export interface RouteToolDeps {
   subagentProvider: string
   defaultMaxDepth: number
   subagents: {
-    start: (provider: string, request: {
+    /** dsh 0.2.x seam：`startActivation(spec)` 取代了旧 `start(provider, request)`。 */
+    startActivation: (spec: {
+      provider: string
       label?: string
-      prompt: Array<{ type: 'text'; text: string }>
-      parent: unknown
+      request: {
+        prompt: Array<{ type: 'text'; text: string }>
+        parent: unknown
+        signal?: AbortSignal
+        agentOptions?: { provider?: string; model?: string; maxTokens?: number }
+        maxDepth?: number
+      }
       signal?: AbortSignal
-      agentOptions?: { provider?: string; model?: string; maxTokens?: number }
-      maxDepth?: number
-    }) => Promise<SubagentRunLike>
+      delivery?: 'parent' | 'caller'
+    }) => Promise<SubagentActivationLike>
   }
 }
 
@@ -81,15 +87,21 @@ export function registerRouteTools(
       }
       if (exec?.agent === undefined) return { text: 'raincode_route: no parent agent context available.' }
       const maxDepth = typeof args.maxDepth === 'number' ? Math.max(0, Math.min(4, Math.floor(args.maxDepth))) : cfg.defaultMaxDepth
-      let run: SubagentRunLike
+      const signal = exec?.signal ?? new AbortController().signal
+      let run: SubagentActivationLike
       try {
-        run = await cfg.subagents.start(cfg.subagentProvider, {
+        run = await cfg.subagents.startActivation({
+          provider: cfg.subagentProvider,
           label: 'raincode route',
-          prompt: [{ type: 'text', text: prompt }],
-          parent: exec.agent,
-          signal: exec.signal,
-          agentOptions: { provider: 'raincode', model: cfg.mainModel },
-          maxDepth,
+          request: {
+            prompt: [{ type: 'text', text: prompt }],
+            parent: exec.agent,
+            signal,
+            agentOptions: { provider: 'raincode', model: cfg.mainModel },
+            maxDepth,
+          },
+          signal,
+          delivery: 'caller',
         })
       } catch (error) {
         return { text: `raincode_route failed to start subagent: ${String((error as Error)?.message ?? error)}` }

@@ -14,7 +14,8 @@ prompt 缓存 + 重试/故障转移,由本地 OpenAI 兼容网关(Rust)驱动,�
 
 ## 它能做什么
 
-- 自动绑定 chat 模型:raincode 的 chat 模型跟随你当前在 dsh 中使用的模型,无需初始化。
+- 透明接管(尽力而为):dsh 中模型属于模型池的 chat 请求由 raincode 适配器承接;dsh
+  能暴露当前模型时自动推导对应 profile,否则配置 `mainModel` 或 `role: main` 的 profile。
 - 通过 dsh 插件设置配置模型池(profile 带 `role: main | subagent | any` 与方向 `tags`)。
 - 从 OpenRouter、DeepSWE 与 opencode 用量榜刷新模型能力(top 15 每周刷新;其余模型按需刷新)。
 - prompt 缓存、重试与 provider 故障转移(`rc-pro`)。
@@ -59,7 +60,7 @@ install.ps1        构建并安装 raincode CLI(Windows)
 
 ## 快速开始
 
-前置:Rust `>= 1.75`;Node.js `>= 22` 仅在开发插件时需要。
+前置:网关需要 Rust `>= 1.75`;构建/运行插件需要 dsh `>= 0.2.2-rc.1` 与 Node.js `>= 22.19`。
 
 1. 安装 raincode CLI(`>= 0.1.0`):`cargo install --path crates/rc-cli`(或 `./install.sh` / `install.ps1`)。
 2. 配置模型池:`raincode setup`(写入 `~/.raincode/profiles.toml`)。
@@ -68,28 +69,38 @@ install.ps1        构建并安装 raincode CLI(Windows)
 
 ## 在 dsh 中安装
 
+需要 dsh `>= 0.2.2-rc.1`,API 差异与验证记录见
+[`docs/COMPATIBILITY.md`](./docs/COMPATIBILITY.md)。
+
+开发中的仓库可直接把两个插件包 link 进 profile(0.2.2 移植就是这样验证的):
+
 ```bash
-dsh plugin --profile web add dsh-plugins-raincode-skill
-dsh plugin --profile web add dsh-plugins-raincode-routing
+dsh plugin --profile my-profile add \
+  "link:$PWD/packages/plugin-routing" \
+  "link:$PWD/packages/plugin-skill"
 ```
 
-再在 profile 的 patch 层(`~/.dsh/profiles/web/cordis.patch.yml`)为每个插件加入对应行:
+每个包都带 `cordis.patch.yml`,并在 `package.json` 里通过 `dsh.bundle.patch` 声明;
+包进入 `dsh.profile.bundles` 后会自动插入 loader 行:
 
 ```yaml
 - insert:
-    - id: raincode-skill
-      name: dsh-plugins-raincode-skill
-      config:
-        baseURL: http://127.0.0.1:8787
-        apiKeyEnv: RAINCODE_API_KEY
-    - id: raincode-routing
+    - id: dsh-plugins-raincode-routing
       name: dsh-plugins-raincode-routing
-      config:
-        baseURL: http://127.0.0.1:8787
-        apiKeyEnv: RAINCODE_API_KEY
+    - id: dsh-plugins-raincode-skill
+      name: dsh-plugins-raincode-skill
 ```
 
-重启 `dsh web` 生效。每个插件自带 README(中英),说明前置条件、配置字段与提供的工具。
+不启动应用即可校验:
+
+```bash
+dsh --profile my-profile --dump-config | tail -20
+```
+
+设置项会以这两个 id 出现在 dsh 设置界面。字段是 volatile 的,改完下一次请求即生效,
+无需重启。`spawnGateway` 开启时按需拉起网关,二进制查找顺序为:`gatewayBin` 设置 →
+`RAINCODE_BIN` → 仓库内 `target/release/raincode` → `~/.raincode/bin` → `PATH`,
+因此在本仓库执行 `cargo build --release` 即可。
 
 ## 开发
 
@@ -110,6 +121,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 - `docs/superpowers/specs/` — 网关与插件的设计文档。
 - `docs/superpowers/plans/` — 实现计划(含 `tools/enrich_models.py` 背后的能力评分补充计划)。
+- [`docs/COMPATIBILITY.md`](./docs/COMPATIBILITY.md) — dsh 0.2.2 API 面、变更点与本仓库的适配。
+- [`docs/COMPETITORS.md`](./docs/COMPETITORS.md) — 同类 dsh 插件对比与 raincode 的差异。
 - `handoff/` — 交接记录,以及此前多代理重构失败的事后复盘。
 - `skills/` — 默认技能剧本;`agents/` — 供 dsh 子代理使用的角色提示词。
 

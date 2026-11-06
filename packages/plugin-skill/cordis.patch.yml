@@ -1,0 +1,6 @@
+# Bundle patch layer: inserts this plugin's row into a profile's stack.
+# The loader entry id becomes the settings namespace, so keep it identical to
+# the package name (resolveSettingsNamespace matches on either).
+- insert:
+    - id: dsh-plugins-raincode-skill
+      name: dsh-plugins-raincode-skill

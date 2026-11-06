@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 
 /** One raincode model-pool profile, as edited in the dsh plugin settings UI. */
 export interface RaincodeProfile {
@@ -36,10 +37,37 @@ export function isLoopbackBaseURL(baseURL: string): boolean {
   }
 }
 
-/** 用户未配置 `gatewayBin` 时,按 RAINCODE_BIN → PATH 里的 `raincode` 查找。 */
+/**
+ * Resolve the `raincode` gateway executable.
+ *
+ * Order: explicit setting → `RAINCODE_BIN` → a `raincode` built in this repo
+ * (`target/{release,debug}`) → `~/.raincode/bin` → bare `raincode` on PATH.
+ * The repo-local probe makes a linked checkout work right after
+ * `cargo build --release`, without any setting or PATH edits.
+ */
 export function gatewayBin(configured: string | undefined): string {
   if (configured !== undefined && configured.length > 0) return configured
-  return process.env.RAINCODE_BIN ?? 'raincode'
+  const fromEnv = process.env.RAINCODE_BIN
+  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv
+  for (const candidate of binCandidates()) {
+    if (existsSync(candidate)) return candidate
+  }
+  return 'raincode'
+}
+
+function binCandidates(): string[] {
+  const exe = process.platform === 'win32' ? 'raincode.exe' : 'raincode'
+  const candidates: string[] = []
+  try {
+    // packages/core/lib/gateway.js → repository root.
+    const here = dirname(fileURLToPath(import.meta.url))
+    const repoRoot = join(here, '..', '..', '..')
+    candidates.push(join(repoRoot, 'target', 'release', exe), join(repoRoot, 'target', 'debug', exe))
+  } catch {
+    // 非 ESM/打包环境:忽略仓库内探测。
+  }
+  candidates.push(join(homedir(), '.raincode', 'bin', exe))
+  return candidates
 }
 
 /** 插件专用 registry 文件路径(避免污染用户默认 ~/.raincode/profiles.toml)。 */
@@ -75,16 +103,33 @@ export function writeRegistry(path: string, profiles: RaincodeProfile[]): Promis
   return writeFile(path, lines.join('\n'))
 }
 
-/** 读取 dsh 当前正在和用户交互的模型。 */
+/**
+ * 读取 dsh 当前正在和用户交互的模型。
+ *
+ * dsh 0.2.x 把模型选择改成了 per-session projection，旧的
+ * `agent-default-model` settings 命名空间不复存在。这里保留兼容探测：如果
+ * 某个 settings 条目（旧版本）仍以 `agent-default-model` 结尾且带 model 字段，
+ * 就用它推导默认 profile；否则返回 undefined，由调用方回退到显式配置。
+ */
 export function readDshCurrentModel(ctx: Context): { provider: string; model: string } | undefined {
   try {
-    const ns = settingsNamespace('agent-default-model')
-    const value = ctx.settings?.get(ns) as { provider?: string; model?: string } | undefined
-    if (value === undefined || value.model === undefined || value.model.length === 0) return undefined
-    return { provider: value.provider ?? 'deepseek-official', model: value.model }
+    const settings = (ctx as unknown as {
+      settings?: { describe?: () => Array<{ ns?: unknown; value?: unknown }> }
+    }).settings
+    if (typeof settings?.describe !== 'function') return undefined
+    for (const descriptor of settings.describe()) {
+      const ns = String(descriptor.ns ?? '')
+      if (!ns.endsWith('agent-default-model')) continue
+      const value = descriptor.value as { provider?: unknown; model?: unknown } | undefined
+      if (value === undefined) continue
+      const model = value.model
+      if (typeof model !== 'string' || model.length === 0) continue
+      return { provider: typeof value.provider === 'string' ? value.provider : 'deepseek-official', model }
+    }
   } catch {
-    return undefined
+    // settings 服务不可用或形态变化：按未探测到处理。
   }
+  return undefined
 }
 
 /** 从 dsh 当前模型推导一个默认 raincode profile;推导不出返回 undefined。 */
@@ -160,6 +205,14 @@ export function createGatewayManager(ctx: Context, baseURL: string, bin: string,
         spawned.once('spawn', () => resolve())
         spawned.once('error', (error) => {
           child = undefined
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            reject(new Error(
+              `raincode gateway binary not found: ${bin}. Build it with \`cargo build --release\` ` +
+              '(then it is auto-detected at target/release/raincode), or set the gatewayBin ' +
+              'plugin setting / RAINCODE_BIN environment variable.',
+            ))
+            return
+          }
           reject(error)
         })
       })
@@ -181,4 +234,49 @@ export function createGatewayManager(ctx: Context, baseURL: string, bin: string,
   }
 
   return { ensure, killChild }
+}
+
+interface SharedGateway {
+  ensure: () => Promise<void>
+  killChild: () => void
+  refs: number
+}
+
+const sharedGateways = new Map<string, SharedGateway>()
+
+/**
+ * 同一 profile 内多个 raincode 插件共享一个 gateway 进程。
+ *
+ * 两个插件各自 `ensure()` 时若都 spawn，会争抢同一个端口。这里按
+ * baseURL + bin + registry 路径去重：第一个调用方创建管理器并计数，
+ * 后续调用方复用；每个调用方 dispose 时 `release()`，最后一个释放才 kill。
+ */
+export function acquireGatewayManager(
+  ctx: Context,
+  baseURL: string,
+  bin: string,
+  registryPath: string,
+): { ensure: () => Promise<void>; release: () => void } {
+  const key = `${baseURL.replace(/\/+$/, '')}|${bin}|${registryPath}`
+  let slot = sharedGateways.get(key)
+  if (slot === undefined) {
+    const created = createGatewayManager(ctx, baseURL, bin, registryPath)
+    slot = { ensure: created.ensure, killChild: created.killChild, refs: 0 }
+    sharedGateways.set(key, slot)
+  }
+  const shared = slot
+  shared.refs += 1
+  let released = false
+  return {
+    ensure: () => shared.ensure(),
+    release: () => {
+      if (released) return
+      released = true
+      shared.refs -= 1
+      if (shared.refs <= 0) {
+        shared.killChild()
+        sharedGateways.delete(key)
+      }
+    },
+  }
 }

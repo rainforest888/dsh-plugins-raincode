@@ -8,11 +8,14 @@ export {
   type RaincodeModel,
 } from './adapter.js'
 
+export { readLiveConfig, resolveSettingsNamespace, volatileField, liveValue } from './live.js'
+
 export { serializeRequest } from './serialize.js'
 export { translate, mapFinishReason, mapUsage } from './translate.js'
 export { parseSse } from './sse.js'
 
 export {
+  acquireGatewayManager,
   createGatewayManager,
   defaultProfileFor,
   gatewayBin,

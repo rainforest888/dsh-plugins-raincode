@@ -1,14 +1,20 @@
 import { describe, it, expect } from 'vitest'
+import {
+  ReasoningEffortId,
+  ToolCallId,
+  createAssistantMessage,
+  createToolResultMessage,
+  createUserMessage,
+} from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { serializeRequest } from './serialize.js'
-import type { GenerateOptions, Message, ContentBlock } from '@deepseek-ai/dsh-llm'
 
-function msg(role: 'user' | 'assistant', blocks: ContentBlock[]): Message {
-  return {
-    id: `m-${Math.random()}`,
-    role,
-    content: blocks,
-    source: role === 'assistant' ? { kind: 'model', provider: 'raincode', model: 'm' } : { kind: 'user' },
-  }
+function user(blocks: ContentBlock[]) {
+  return createUserMessage({ content: blocks, source: { kind: 'user' } })
+}
+
+function assistant(blocks: ContentBlock[]) {
+  return createAssistantMessage({ content: blocks, source: { provider: 'raincode', model: 'deepseek-v4-flash' } })
 }
 
 describe('serializeRequest', () => {
@@ -17,17 +23,21 @@ describe('serializeRequest', () => {
     model: 'deepseek-v4-flash',
     system: 'You are a coding agent.',
     messages: [
-      msg('user', [{ type: 'text', text: 'hello' }]),
-      msg('assistant', [
+      user([{ type: 'text', text: 'hello' }]),
+      assistant([
         { type: 'reasoning', text: 'need to read' },
-        { type: 'tool-call', id: 'call_1', name: 'read', arguments: '{"path":"a.ts"}' },
+        { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{"path":"a.ts"}' },
       ]),
-      msg('user', [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] }]),
+      createToolResultMessage({
+        callId: ToolCallId('call_1'),
+        content: [{ type: 'text', text: 'ok' }],
+        isError: false,
+      }),
     ],
     tools: [{ name: 'read', description: 'read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
     stop: ['END'],
-    reasoningEffort: 'high',
-    sessionId: 'sess-9',
+    reasoningEffort: ReasoningEffortId('high'),
+    sessionId: 'sess-9' as unknown as GenerateOptions['sessionId'],
   }
 
   it('builds a deepseek-compatible chat body', () => {
@@ -49,20 +59,18 @@ describe('serializeRequest', () => {
   })
 
   it('omits reasoning_effort when off', () => {
-    const body = serializeRequest({ ...options, reasoningEffort: 'off' })
+    const body = serializeRequest({ ...options, reasoningEffort: ReasoningEffortId('off') })
     expect(body['reasoning_effort']).toBeUndefined()
   })
 
-  it('expands every tool result into its own tool message, user text first', () => {
+  it('serializes each tool-role message as its own tool message', () => {
     const body = serializeRequest({
       ...options,
       system: undefined,
       messages: [
-        msg('user', [
-          { type: 'text', text: 'results:' },
-          { type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'a' }] },
-          { type: 'tool-result', toolCallId: 'c2', content: [{ type: 'text', text: 'b' }] },
-        ]),
+        user([{ type: 'text', text: 'results:' }]),
+        createToolResultMessage({ callId: ToolCallId('c1'), content: [{ type: 'text', text: 'a' }], isError: false }),
+        createToolResultMessage({ callId: ToolCallId('c2'), content: [{ type: 'text', text: 'b' }], isError: false }),
       ],
     })
     const messages = body['messages'] as Record<string, unknown>[]
@@ -77,10 +85,28 @@ describe('serializeRequest', () => {
     const body = serializeRequest({
       ...options,
       system: undefined,
-      messages: [msg('assistant', [{ type: 'reasoning', text: 'silent' }, { type: 'text', text: 'hi' }])],
+      messages: [assistant([{ type: 'reasoning', text: 'silent' }, { type: 'text', text: 'hi' }])],
     })
     const messages = body['messages'] as Record<string, unknown>[]
     expect(messages[0]).toEqual({ role: 'assistant', content: 'hi' })
+  })
+
+  it('drops developer tool-update messages the wire cannot carry', () => {
+    const body = serializeRequest({
+      ...options,
+      system: undefined,
+      messages: [
+        user([{ type: 'text', text: 'hi' }]),
+        {
+          id: 'dev-1' as never,
+          role: 'developer',
+          content: [{ type: 'tool-removal', toolName: 'read' }],
+          source: { kind: 'user' },
+        },
+      ],
+    })
+    const messages = body['messages'] as Record<string, unknown>[]
+    expect(messages).toEqual([{ role: 'user', content: 'hi' }])
   })
 
   it('rejects image content instead of silently erasing it', () => {
@@ -89,7 +115,7 @@ describe('serializeRequest', () => {
       serializeRequest({
         ...options,
         system: undefined,
-        messages: [msg('user', [imageBlock])],
+        messages: [user([imageBlock])],
       })
       expect.unreachable('serializeRequest must reject image content')
     } catch (error) {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugins-raincode-routing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model auto-routing inside DeepSeek Harness (dsh): raincode_route orchestrates a strong main model that dispatches cheaper subagents by direction, with capability refresh and status, backed by the raincode gateway.",
   "type": "module",
   "main": "lib/index.js",
@@ -17,7 +17,8 @@
     "lib",
     "README.md",
     "README.zh.md",
-    "LICENSE"
+    "LICENSE",
+    "cordis.patch.yml"
   ],
   "license": "MIT",
   "repository": {
@@ -38,25 +39,25 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-credentials": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-launch-environment": "0.0.1-rc.3",
-    "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-settings": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.0.1-rc.1"
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-launch-environment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1"
   },
   "dependencies": {
-    "@raincode-dsh/core": "0.1.0",
-    "@deepseek-ai/schemastery": "3.18.1"
+    "@raincode-dsh/core": "0.2.0",
+    "@deepseek-ai/schemastery": "3.19.0"
   },
   "devDependencies": {
-    "@raincode-dsh/core": "0.1.0",
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-credentials": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-launch-environment": "0.0.1-rc.3",
-    "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-settings": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.0.1-rc.1",
+    "@raincode-dsh/core": "0.2.0",
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-launch-environment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0"
@@ -68,5 +69,19 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.2-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.2-rc.1+": "compatible"
+      }
+    }
   }
 }

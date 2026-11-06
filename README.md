@@ -16,8 +16,10 @@ model logic.
 
 ## What it does
 
-- Automatic chat-model binding: the raincode chat model follows the model you are
-  currently using in dsh — no first-time setup.
+- Transparent takeover (best effort): dsh chat requests whose model is in the pool
+  are served by the raincode adapter; a matching profile is derived from dsh's
+  current model when dsh exposes one, otherwise set `mainModel` or a `role: main`
+  profile.
 - Model pool configured through dsh plugin settings (profiles with
   `role: main | subagent | any` and direction `tags`).
 - Capability refresh from OpenRouter, DeepSWE and opencode usage leaderboards
@@ -66,8 +68,8 @@ install.ps1        build + install the raincode CLI (Windows)
 
 ## Quick start
 
-Prerequisites: Rust `>= 1.75`; Node.js `>= 22` only if you want to develop the
-plugins.
+Prerequisites: Rust `>= 1.75` for the gateway; dsh `>= 0.2.2-rc.1` and Node.js
+`>= 22.19` to build/run the plugins.
 
 1. Install the raincode CLI (`>= 0.1.0`):
    `cargo install --path crates/rc-cli` (or `./install.sh` / `install.ps1`).
@@ -77,30 +79,40 @@ plugins.
 
 ## Install in dsh
 
+Requires dsh `>= 0.2.2-rc.1` — see [`docs/COMPATIBILITY.md`](./docs/COMPATIBILITY.md)
+for the API surface, the 0.2.2 changes and the verification notes.
+
+In a development checkout, link both plugin packages into a profile (this is the
+setup the 0.2.2 port was validated with):
+
 ```bash
-dsh plugin --profile web add dsh-plugins-raincode-skill
-dsh plugin --profile web add dsh-plugins-raincode-routing
+dsh plugin --profile my-profile add \
+  "link:$PWD/packages/plugin-routing" \
+  "link:$PWD/packages/plugin-skill"
 ```
 
-Then add a row for each plugin to the profile's patch layer
-(`~/.dsh/profiles/web/cordis.patch.yml`):
+Each package ships a `cordis.patch.yml` and declares it under `dsh.bundle.patch`, so
+adding the package to `dsh.profile.bundles` inserts its loader row automatically:
 
 ```yaml
 - insert:
-    - id: raincode-skill
-      name: dsh-plugins-raincode-skill
-      config:
-        baseURL: http://127.0.0.1:8787
-        apiKeyEnv: RAINCODE_API_KEY
-    - id: raincode-routing
+    - id: dsh-plugins-raincode-routing
       name: dsh-plugins-raincode-routing
-      config:
-        baseURL: http://127.0.0.1:8787
-        apiKeyEnv: RAINCODE_API_KEY
+    - id: dsh-plugins-raincode-skill
+      name: dsh-plugins-raincode-skill
 ```
 
-Restart `dsh web` to load them. Each plugin has its own README (English + 中文)
-covering prerequisites, configuration fields and the tools it provides.
+Check the wiring without starting the app:
+
+```bash
+dsh --profile my-profile --dump-config | tail -20
+```
+
+Settings show up under those two ids in dsh's settings UI. They are volatile:
+edits apply to the next request, no restart. The gateway starts on demand when
+`spawnGateway` is on; the binary is looked up as `gatewayBin` setting →
+`RAINCODE_BIN` → repo `target/release/raincode` → `~/.raincode/bin` → `PATH`, so
+`cargo build --release` in this repo is enough.
 
 ## Development
 
@@ -122,6 +134,10 @@ Build the release binary with `npm run backend:build` (or `cargo build --release
 - `docs/superpowers/specs/` — design documents for the gateway and the plugins.
 - `docs/superpowers/plans/` — implementation plans (including the capability-score
   enrichment plan behind `tools/enrich_models.py`).
+- [`docs/COMPATIBILITY.md`](./docs/COMPATIBILITY.md) — dsh 0.2.2 API surface, what
+  changed, and how this repo adapts.
+- [`docs/COMPETITORS.md`](./docs/COMPETITORS.md) — similar dsh plugins and where
+  raincode differs.
 - `handoff/` — handoff notes and a post-mortem of the earlier multi-agent
   refactor attempt.
 - `skills/` — the default skill playbooks; `agents/` — role prompts for dsh

@@ -16,27 +16,32 @@ subagent seam 启动一个强主控模型,把大任务拆解后按方向派发�
 | `raincode_refresh_model` | 用户说"查一下某模型的能力" |
 | `raincode_status` | 用户问 raincode 状态 / 子代理状况 / token 用量(路由与模型池侧) |
 
-`raincode_route` 流程:chat 模型调用工具 → 插件通过 dsh `subagents.start` 用 raincode
+`raincode_route` 流程:chat 模型调用工具 → 插件通过 dsh `subagents.startActivation` 用 raincode
 主控模型(`mainModel`)启动一个 one-shot 子代理 → 该主控再通过 dsh 原生 subagent 工具派发
 子/孙代理。派发深度受 `maxDepth` 限制。
 
-插件还注册一个 `raincode` provider,可接管 dsh 当前的 chat 模型,映射到匹配的 raincode
-模型池 profile。
+`raincode` provider 与适配器由本插件注册(skill 插件不再注册,两个插件同装不会重复声明),
+并可接管 dsh 中模型属于模型池的 chat 请求。
 
 ## 前置条件
 
 1. 一个实现 `/v1/models`、`PUT /profiles`、`/capabilities/refresh` 的 **raincode 网关**。
-2. 想自动拉起网关(`spawnGateway: true`)则 `raincode` 需在 `PATH` 或设 `RAINCODE_BIN`。
+2. dsh `>= 0.2.2-rc.1`。
+3. 想自动拉起网关(`spawnGateway: true`)时,`raincode` 二进制需能被找到:`gatewayBin` 设置、
+   `RAINCODE_BIN`、仓库 `target/release/`、`~/.raincode/bin` 或 `PATH`。
 3. dsh profile/preset 必须启用 `subagent` 工具(provider `spawn`)与
    `subagent-spawn-in-process` provider,否则 `raincode_route` 无法启动代理。
 
 ## dsh 安装
 
+需要 dsh `>= 0.2.2-rc.1`。在仓库中:
+
 ```bash
-dsh plugin --profile web add dsh-plugins-raincode-routing
+dsh plugin --profile my-profile add "link:$PWD"
 ```
 
-在 patch 层加一行并把 `baseURL` 指向 raincode 网关,重启 `dsh web` 生效。
+包自带 `cordis.patch.yml`(通过 `dsh.bundle.patch` 声明),loader 行会自动插入;
+可用 `dsh --profile my-profile --dump-config` 校验。
 
 ## 配置
 
@@ -48,7 +53,7 @@ dsh plugin --profile web add dsh-plugins-raincode-routing
 | `subagentProvider` | `spawn` | dsh subagent provider 名 |
 | `maxDepth` | `3` | `raincode_route` 最大派发深度 |
 | `spawnGateway` | `true` | 插件加载时自动启动 `raincode proxy` |
-| `gatewayBin` | `RAINCODE_BIN` / `raincode` | 拉起网关用的可执行文件 |
+| `gatewayBin` | 自动探测 | 网关可执行文件;留空时按 `RAINCODE_BIN` / 仓库构建 / `~/.raincode/bin` / `PATH` 查找 |
 | `streamIdleTimeoutMs` | `300000` | 流式空闲超时 |
 | `retryPolicy` | dsh 默认 | 模型调用重试策略 |
 

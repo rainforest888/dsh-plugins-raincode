@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { RaincodeAdapter, type RaincodeConnectionOptions } from './adapter.js'
-import { resolveRetryPolicy, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { MessageId, resolveRetryPolicy, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 
 let server: Server
 let port = 0
@@ -51,7 +51,7 @@ function conn(): RaincodeConnectionOptions {
 function makeOptions(): GenerateOptions {
   return {
     provider: 'raincode', model: 'deepseek-v4-flash',
-    messages: [{ id: 'm1', role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }],
+    messages: [{ id: MessageId('m1'), role: 'user', content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } }],
   }
 }
 

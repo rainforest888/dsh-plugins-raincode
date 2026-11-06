@@ -17,8 +17,8 @@ function deps(overrides: Partial<RouteToolDeps> = {}): RouteToolDeps {
     subagentProvider: 'spawn',
     defaultMaxDepth: 3,
     subagents: {
-      start: async (_provider, request) => ({
-        id: 'run-1',
+      startActivation: async () => ({
+        childId: 'run-1',
         result: Promise.resolve({ output: [{ type: 'text', text: 'orchestrated result' }], stopReason: 'completed' }),
         dispose: async () => {},
       }),
@@ -33,10 +33,10 @@ describe('raincode_route', () => {
     const started: unknown[] = []
     const cfg = deps({
       subagents: {
-        start: async (provider, request) => {
-          started.push({ provider, request })
+        startActivation: async (spec) => {
+          started.push(spec)
           return {
-            id: 'run-1',
+            childId: 'run-1',
             result: Promise.resolve({ output: [{ type: 'text', text: 'done' }], stopReason: 'completed' }),
             dispose: async () => {},
           }
@@ -48,7 +48,11 @@ describe('raincode_route', () => {
     const out = await tool.execute({ prompt: 'build a web app', maxDepth: 2 }, { agent: { id: 'parent' } })
     expect(out.text).toBe('done')
     expect(started).toHaveLength(1)
-    expect(started[0]).toMatchObject({ provider: 'spawn' })
+    expect(started[0]).toMatchObject({
+      provider: 'spawn',
+      delivery: 'caller',
+      request: { agentOptions: { provider: 'raincode', model: 'deepseek-v4-pro' }, maxDepth: 2 },
+    })
   })
 
   it('requires a prompt', async () => {
